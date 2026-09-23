@@ -141,6 +141,99 @@ def validate_saved_script(script_id: int):
     return result
 
 
+# ---- branch coverage ------------------------------------------------------
+
+@app.get("/api/scripts/{script_id}/coverage")
+def script_coverage(script_id: int):
+    """Aggregate how often each option of the *current* script was chosen.
+
+    Saved runs from both sources are counted:
+      * editor preview sessions (runs.mode = 'script', script_id matched)
+      * answer sessions created via read-only share links whose snapshot
+        belongs to this script (runs.mode = 'share', joined via shares)
+
+    Every recorded choice is a (node_id, option_id) pair. Pairs whose node or
+    option no longer exists in the current content are ignored, so editing the
+    script never produces statistics for vanished options. Options without a
+    connected target are not selectable in a run, so they are reported but
+    excluded from the coverage rate / uncovered list.
+    """
+    script = _fetch_script(script_id)
+    content = script["content"]
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT r.mode AS mode, r.finished AS finished, r.steps AS steps "
+            "FROM runs r LEFT JOIN shares s ON r.share_token = s.token "
+            "WHERE (r.mode = 'script' AND r.script_id = ?) "
+            "   OR (r.mode = 'share' AND s.script_id = ?)",
+            (script_id, script_id),
+        ).fetchall()
+
+    counts: dict[tuple[str, str], int] = {}
+    preview_runs = share_runs = finished_runs = total_choices = 0
+    for row in rows:
+        if row["mode"] == "share":
+            share_runs += 1
+        else:
+            preview_runs += 1
+        finished_runs += 1 if row["finished"] else 0
+        for step in json.loads(row["steps"]):
+            node_id, option_id = step.get("node_id"), step.get("option_id")
+            # option_id is recorded on the step of the node the choice was made at
+            if node_id and option_id:
+                counts[(node_id, option_id)] = counts.get((node_id, option_id), 0) + 1
+                total_choices += 1
+
+    node_map = {n.get("id"): n for n in content.get("nodes", [])}
+    has_runs = bool(rows)
+    selectable_total = covered_total = 0
+    uncovered_options: list[dict] = []
+    nodes_out: list[dict] = []
+    for node in content.get("nodes", []):
+        options_out = []
+        for opt in node.get("options", []) or []:
+            target = opt.get("target_id")
+            selectable = bool(target and target in node_map)
+            count = counts.get((node["id"], opt.get("id")), 0)
+            covered = count > 0
+            if selectable:
+                selectable_total += 1
+                if covered:
+                    covered_total += 1
+                elif has_runs:
+                    uncovered_options.append({"node_id": node["id"], "option_id": opt.get("id")})
+            options_out.append({
+                "option_id": opt.get("id"),
+                "label": opt.get("label", ""),
+                "target_id": target,
+                "selectable": selectable,
+                "count": count,
+                "covered": covered,
+            })
+        nodes_out.append({
+            "node_id": node.get("id"),
+            "title": node.get("title", ""),
+            "type": node.get("type", "question"),
+            "terminal": bool(node.get("terminal")),
+            "options": options_out,
+        })
+
+    return {
+        "script_id": script_id,
+        "has_runs": has_runs,
+        "run_count": len(rows),
+        "preview_runs": preview_runs,
+        "share_runs": share_runs,
+        "finished_runs": finished_runs,
+        "total_choices": total_choices,
+        "nodes": nodes_out,
+        "option_count": selectable_total,
+        "covered_option_count": covered_total,
+        "uncovered_options": uncovered_options,
+        "coverage_rate": round(covered_total / selectable_total, 4) if selectable_total else 0.0,
+    }
+
+
 # ---- import / export ------------------------------------------------------
 
 @app.get("/api/scripts/{script_id}/export")

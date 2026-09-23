@@ -28,6 +28,7 @@
       <button class="primary" id="btnSave">保存 (Ctrl+S)</button>
       <div class="spacer"></div>
       <button id="btnPreview">▶ 运行预览</button>
+      <button id="btnCoverage" title="按已保存运行记录统计各选项被选择次数">📊 分支覆盖</button>
       <button id="btnShare">🔗 只读分享</button>
       <button id="btnExport">导出 JSON</button>
       <button id="btnImport">导入 JSON</button>
@@ -49,7 +50,8 @@
         Ctrl/Cmd+Z 撤销 · Shift+Ctrl/Cmd+Z 重做 · 空白处拖动平移画布 ·
         <b style="color:var(--cycle)">红=环路</b> /
         <b style="color:var(--orphan)">橙虚线=孤立</b> /
-        <b style="color:var(--uncovered)">紫=未覆盖出口</b>
+        <b style="color:var(--uncovered)">紫=未覆盖出口</b> ·
+        <b style="color:var(--coverage)">📊 分支覆盖=选项被选择次数</b>
       </div>
     </div>
   </div>
@@ -76,6 +78,21 @@
     </div>
     <footer>
       <button data-close="previewModal">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- coverage modal -->
+<div class="modal-mask" id="coverageModal">
+  <div class="modal wide">
+    <header>分支覆盖统计<span class="close" data-close="coverageModal">✕</span></header>
+    <div class="body">
+      <div id="coverageSummary"></div>
+      <div id="coverageList"></div>
+    </div>
+    <footer>
+      <button id="coverageRefresh">↻ 刷新统计</button>
+      <button data-close="coverageModal">关闭</button>
     </footer>
   </div>
 </div>
