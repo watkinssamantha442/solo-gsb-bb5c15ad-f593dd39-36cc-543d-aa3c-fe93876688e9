@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>访谈预览（只读分享）</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body style="background:#f4f5f7">
+<div class="readonly-banner">
+  🔒 只读分享 · 访谈脚本：<b id="shareName" style="margin:0 6px"></b>
+  <span style="margin-left:auto">此页面为只读快照，无法编辑脚本</span>
+</div>
+<div style="max-width:860px;margin:24px auto;padding:0 16px">
+  <div class="preview-grid" style="grid-template-columns:1fr 240px">
+    <div>
+      <div id="previewCard" style="font-size:15px"></div>
+      <div style="margin-top:12px"><button id="runRestart">↺ 重新开始</button></div>
+    </div>
+    <div>
+      <div class="path-list">
+        <h4>回答路径记录</h4>
+        <div id="runPath"></div>
+      </div>
+    </div>
+  </div>
+  <div id="fatal" style="display:none;margin-top:40px;text-align:center;color:#991b1b"></div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+  let runId = null;
+  const token = new URLSearchParams(location.search).get("token");
+
+  function renderRun(r) {
+    const node = r.current_node;
+    const card = document.getElementById("previewCard");
+    if (r.finished || node.terminal || !(node.options || []).length) {
+      card.innerHTML = `
+        <div class="q-card">
+          <div class="q-title">${esc(node.title)}</div>
+          <div class="q-text">${esc(node.text)}</div>
+          <div class="end">— 访谈结束 —</div>
+        </div>`;
+    } else {
+      card.innerHTML = `
+        <div class="q-card">
+          <div class="q-title">${esc(node.title)}</div>
+          <div class="q-text">${esc(node.text)}</div>
+          <div class="choices">
+            ${node.options.map((o) =>
+              `<button data-oid="${o.id}" ${o.target_id ? "" : "disabled"}>
+                 ${esc(o.label)}${o.target_id ? "" : "（未连接）"}
+               </button>`).join("")}
+          </div>
+        </div>`;
+      card.querySelectorAll("button[data-oid]").forEach((b) => {
+        b.onclick = async () => {
+          const nr = await api(`/api/runs/${runId}/choice`, {
+            method: "POST", body: { option_id: b.dataset.oid } });
+          renderRun(nr);
+        };
+      });
+    }
+    document.getElementById("runPath").innerHTML = r.steps.map((s, i) => `
+      <div class="path-step">
+        ${i + 1}. ${esc(s.title || s.node_id)}
+        ${s.answer ? `<div class="ans">↳ 回答：${esc(s.answer)}</div>` : ""}
+      </div>`).join("");
+  }
+
+  document.getElementById("runRestart").onclick = async () => {
+    if (!runId) return;
+    renderRun(await api(`/api/runs/${runId}/restart`, { method: "POST" }));
+  };
+
+  (async () => {
+    try {
+      const share = await api(`/api/share/${token}`);
+      document.title = `${share.name} · 只读访谈`;
+      document.getElementById("shareName").textContent = share.name;
+      const r = await api("/api/runs", { method: "POST", body: { share_token: token } });
+      runId = r.run_id;
+      renderRun(r);
+    } catch (err) {
+      document.getElementById("fatal").style.display = "block";
+      document.getElementById("fatal").textContent = "无法打开分享：" + err.message;
+    }
+  })();
+</script>
+</body>
+</html>

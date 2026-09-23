@@ -1,0 +1,130 @@
+# 分支访谈脚本编辑器（Branch Interview Script Editor）
+
+用 **Python FastAPI + SQLite + 原生 JavaScript** 构建的可视化分支访谈脚本编辑器。
+在画布上创建问题节点、用条件选项连接成有向流程图，系统实时检测 **环路 / 孤立节点 / 未覆盖出口** 并在画布上标记；
+保存后可进入「运行预览」按回答跳转并记录完整路径；支持脚本 JSON 导入导出与只读分享链接。
+
+## 一条命令启动
+
+```bash
+docker compose up -d --build
+```
+
+启动后打开浏览器访问：
+
+- 编辑器主页： **http://localhost:8000**
+- API 文档（Swagger）： http://localhost:8000/docs
+
+停止：`docker compose down`（数据保留在命名卷中；加 `-v` 可同时删除数据卷）。
+
+> 首次启动会创建一张内置示例脚本（包含一条演示环路），方便立即体验校验标记。
+
+## 端口与配置
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| 宿主机端口 | `8000` | 在 `docker-compose.yml` 的 `ports` 中修改，例如 `"9000:8000"` |
+| `DB_PATH` | `/data/editor.db` | SQLite 数据库文件路径（容器内），已挂载到命名卷 `editor-data` 持久化 |
+| 数据卷 | `editor-data` | 命名卷，容器删除后脚本与分享数据仍保留 |
+| 重启策略 | `unless-stopped` | 见 compose 文件 |
+
+容器健康检查：每 30 秒请求一次 `GET /api/scripts`。
+
+### 不用 Docker 的本地运行方式
+
+需要 Python 3.11+：
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+# 此时数据库默认为项目根目录下的 editor.db；可用环境变量 DB_PATH 覆盖
+```
+
+## 功能说明
+
+### 画布编辑
+
+- **添加节点**：工具栏「＋ 添加问题节点」，节点支持「问题」和「告知」两种类型；
+- **移动 / 平移**：拖动节点标题移动节点，在画布空白处拖动平移画布；
+- **连线**：按住选项行右侧的小圆点（port）拖到目标节点松开，即建立「选中该选项 → 跳转目标节点」；
+- **编辑**：点击节点在右侧属性栏修改标题、文案、选项文案与跳转目标，可标记「终止节点」和「起始节点」；
+- 点击连线可修改跳转目标或删除连线。
+
+### 撤销 / 重做
+
+- 工具栏「↶ 撤销 / ↷ 重做」按钮与快捷键 **Ctrl/Cmd+Z**、**Shift+Ctrl/Cmd+Z**（另支持 Ctrl+Y）共用同一份历史；
+- 覆盖节点增删、标题/文案/选项修改、连线增删与跳转目标修改、节点拖动等全部画布编辑；
+- 一次节点拖动只记为一条历史；同一输入框内的连续输入自动合并为一条；
+- 撤销/重做后画布、右侧属性栏与流程校验标记（环路/孤立/未覆盖出口）同步刷新，未保存徽标按当前内容与保存点的差异实时更新；
+- 保存脚本或切换脚本后历史清空，从新的基线重新开始记录。
+
+### 实时校验（客户端实时 + 保存后服务端复核）
+
+| 标记 | 颜色 | 含义 |
+| --- | --- | --- |
+| 环路（cycle） | **红色** | 节点处于有向环中（Tarjan SCC 检测），可能导致访谈无法走到终点；对应连线也标红 |
+| 孤立节点（orphan） | **橙色虚线** | 从起始节点出发不可达（BFS 不可达） |
+| 未覆盖出口（uncovered） | **紫色** | 选项没有连接目标（紫色虚线连线/端口），或非终止节点没有任何选项 |
+
+工具栏右侧实时显示各类问题的数量徽标；全部通过时显示「流程校验通过」。
+
+### 运行预览与路径记录
+
+- 保存后点击「▶ 运行预览」，从起始节点开始，按选项逐条跳转；
+- 未连接目标的选项不可选；进入终止节点（或无选项节点）时显示「访谈结束」；
+- 右侧实时记录完整 **回答路径**（节点顺序 + 每步选择的答案），可随时「重新开始」；
+- 路径存储在服务端 SQLite（`runs` 表），刷新后仍可通过 `GET /api/runs/{id}` 查看。
+
+### JSON 导入 / 导出
+
+- **导出**：下载形如 `脚本名.json` 的文件，格式为 `{"format":"branch-interview-script","version":1,"name":...,"content":...}`；
+- **导入**：支持上述导出格式，也支持直接导入 `{"start_node_id":...,"nodes":[...]}` 的裸 content 对象；
+- 内容经过 Pydantic 校验，格式非法时返回 400 与错误信息。
+
+### 只读分享链接
+
+- 工具栏「🔗 只读分享」生成形如 `http://localhost:8000/share.html?token=xxxx` 的链接；
+- 分享内容是 **生成时的只读快照**（独立存储），之后继续编辑脚本不影响已分享版本；
+- 分享页只展示受访者视角：逐题作答 + 路径记录，页面带「只读」提示，无任何编辑入口。
+
+## 数据模型（SQLite）
+
+- `scripts`：脚本（名称、JSON content、时间戳）；
+- `shares`：只读分享快照（随机 token、快照内容）；
+- `runs`：预览/分享作答会话（当前节点、步骤 JSON、是否结束）。
+
+## 主要 API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/scripts` | 脚本列表 |
+| POST | `/api/scripts` | 新建脚本 |
+| GET/PUT/DELETE | `/api/scripts/{id}` | 读取 / 更新 / 删除 |
+| POST | `/api/scripts/{id}/validate` | 服务端环路/孤立/未覆盖出口校验 |
+| GET | `/api/scripts/{id}/export` | 导出 JSON |
+| POST | `/api/import` | 导入 JSON |
+| POST | `/api/scripts/{id}/share` | 生成只读分享链接 |
+| GET | `/api/share/{token}` | 读取分享快照（read_only） |
+| POST | `/api/runs` | 开始预览（`script_id` 或 `share_token`） |
+| POST | `/api/runs/{id}/choice` | 提交一个选项并跳转 |
+| GET | `/api/runs/{id}` | 查看会话与已记录路径 |
+| POST | `/api/runs/{id}/restart` | 重新开始 |
+
+## 目录结构
+
+```
+.
+├── app/
+│   ├── main.py        # FastAPI 路由：CRUD / 校验 / 导入导出 / 分享 / 运行
+│   ├── graph.py       # 图算法：Tarjan 环路、BFS 可达性、出口检查、跳转
+│   └── db.py          # SQLite 连接与建表
+├── static/
+│   ├── index.html     # 编辑器单页
+│   ├── share.html     # 只读分享页
+│   ├── app.js         # 编辑器：画布/连线/实时校验/预览/导入导出（原生 JS）
+│   ├── common.js      # fetch/弹窗等公共函数
+│   └── styles.css
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
+```
