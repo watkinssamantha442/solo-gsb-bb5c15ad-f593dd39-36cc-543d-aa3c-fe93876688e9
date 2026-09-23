@@ -28,6 +28,7 @@
       <button class="primary" id="btnSave">保存 (Ctrl+S)</button>
       <div class="spacer"></div>
       <button id="btnPreview">▶ 运行预览</button>
+      <button id="btnCoverage">📊 分支覆盖</button>
       <button id="btnShare">🔗 只读分享</button>
       <button id="btnExport">导出 JSON</button>
       <button id="btnImport">导入 JSON</button>
@@ -94,6 +95,18 @@
       <div style="margin-top:12px"><button class="primary" id="shareOpen">在新标签页打开</button></div>
     </div>
     <footer><button data-close="shareModal">关闭</button></footer>
+  </div>
+</div>
+
+<!-- branch coverage modal -->
+<div class="modal-mask" id="coverageModal">
+  <div class="modal wide">
+    <header><span id="coverageHead">分支覆盖统计</span><span class="close" data-close="coverageModal">✕</span></header>
+    <div class="body" id="coverageBody"></div>
+    <footer>
+      <button id="coverageRefresh">↻ 刷新统计</button>
+      <button data-close="coverageModal">关闭</button>
+    </footer>
   </div>
 </div>
 

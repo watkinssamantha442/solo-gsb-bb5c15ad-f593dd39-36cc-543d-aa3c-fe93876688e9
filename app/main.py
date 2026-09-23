@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .db import get_db, init_db
+from .graph import coverage_stats
 from .graph import step as graph_step
 from .graph import validate as validate_content
 
@@ -139,6 +140,29 @@ def validate_saved_script(script_id: int):
     script = _fetch_script(script_id)
     result = validate_content(script["content"])
     return result
+
+
+# ---- branch coverage ------------------------------------------------------
+
+@app.get("/api/scripts/{script_id}/coverage")
+def script_coverage(script_id: int):
+    """Aggregate saved script-mode runs: how often each current option was chosen.
+
+    Read-only over the `runs` table; an empty statistics payload (all zero
+    counts, empty never_taken flagging) is returned when the script has no
+    runs yet. Share-mode runs belong to a frozen snapshot and are excluded.
+    """
+    script = _fetch_script(script_id)
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT steps FROM runs WHERE mode = 'script' AND script_id = ?",
+            (script_id,),
+        ).fetchall()
+    runs = [{"steps": json.loads(row["steps"])} for row in rows]
+    stats = coverage_stats(script["content"], runs)
+    stats["script_id"] = script_id
+    stats["script_name"] = script["name"]
+    return stats
 
 
 # ---- import / export ------------------------------------------------------

@@ -164,6 +164,35 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .inspector .empty { color: var(--muted); font-size: 13px; }
 .inspector .danger-zone { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
 
+/* branch coverage (inspector + modal) */
+.cov-summary { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+.cov-summary h4, .cov-node-title { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.cov {
+  display: inline-flex; align-items: center; gap: 4px; border-radius: 999px;
+  padding: 1px 8px; font-size: 11px; font-weight: 500; white-space: nowrap;
+}
+.cov.taken { background: #dcfce7; color: var(--start); }
+.cov.never { background: #fee2e2; color: var(--cycle); }
+.cov.none { background: #f3f4f6; color: var(--muted); }
+.cov-rate { color: var(--text); font-weight: 600; font-size: 12px; }
+.opt-edit .cov-line { margin-top: 6px; min-height: 18px; }
+.cov-meter { height: 8px; border-radius: 999px; background: #e5e7eb; overflow: hidden; margin: 8px 0; }
+.cov-meter.big { height: 10px; }
+.cov-meter span { display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--start), #4ade80); }
+.cov-nums { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.cov-summary button { width: 100%; }
+
+.cov-summary-bar { margin-bottom: 14px; padding: 10px 12px; background: #f9fafb;
+  border: 1px solid #eef0f3; border-radius: 8px; font-size: 13px; }
+.cov-stale { font-size: 12px; color: var(--orphan); margin-top: 4px; }
+.cov-node { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.cov-row { display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 0; font-size: 13px; border-top: 1px dashed #f3f4f6; }
+.cov-row:first-of-type { border-top: none; }
+.cov-row .cov-opt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
+.cov-row.never .cov-opt { color: var(--cycle); }
+
 /* ---------- modal ---------- */
 .modal-mask {
   position: fixed; inset: 0; background: rgba(15, 23, 42, .45);

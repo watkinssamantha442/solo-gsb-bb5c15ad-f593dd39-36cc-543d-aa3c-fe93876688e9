@@ -1,7 +1,9 @@
-"""Branch script graph: validation (cycles / orphans / uncovered exits) and traversal."""
+"""Branch script graph: validation, traversal and branch coverage aggregation."""
 from __future__ import annotations
 
+import json
 from collections import deque
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -149,3 +151,92 @@ def step(content: dict, node_id: str, option_id: str | None = None) -> dict[str,
     if not target or target not in node_map:
         raise ValueError("选项未连接到目标节点")
     return {"node": node_map[target], "finished": False}
+
+
+# ---- branch coverage ------------------------------------------------------
+
+def coverage_stats(content: dict[str, Any], runs: Iterable[dict]) -> dict[str, Any]:
+    """Aggregate how often each current option was chosen across saved runs.
+
+    `runs` is an iterable of run rows (dicts) carrying a JSON `steps` list;
+    every step but the last one answers the node it is attached to via
+    `option_id` (the last step has option_id None — the interview stopped there).
+
+    Counts are aligned to the *current* script: only (node_id, option_id)
+    pairs that still exist are reported; choices pointing at options deleted
+    since the run was recorded are counted under `stale_choices`. With no runs
+    (or no choices) every option simply has count 0 and `never_taken` is an
+    empty list — zero observations must not be read as "branch never taken".
+    """
+    nodes: list[dict] = content.get("nodes") or []
+    node_ids = {n.get("id") for n in nodes}
+    option_ids: dict[Any, set] = {}
+    for node in nodes:
+        option_ids[node.get("id")] = {
+            o.get("id") for o in node.get("options", []) or []
+        }
+
+    counts: dict[Any, dict[Any, int]] = {
+        nid: {oid: 0 for oid in oids} for nid, oids in option_ids.items()
+    }
+    run_count = 0
+    choice_count = 0
+    stale_choices = 0
+
+    for run in runs:
+        run_count += 1
+        steps = run.get("steps") or []
+        if isinstance(steps, str):
+            # tolerate raw DB rows where steps is still a JSON string
+            try:
+                steps = json.loads(steps)
+            except (ValueError, TypeError):
+                steps = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            option_id = step.get("option_id")
+            if not option_id:
+                continue  # the final step of a run has no answer
+            choice_count += 1
+            node_id = step.get("node_id")
+            if node_id in node_ids and option_id in option_ids.get(node_id, ()):
+                counts[node_id][option_id] += 1
+            else:
+                stale_choices += 1
+
+    per_node: list[dict] = []
+    total_options = 0
+    taken_options = 0
+    for node in nodes:
+        options = []
+        for opt in node.get("options", []) or []:
+            c = counts.get(node.get("id"), {}).get(opt.get("id"), 0)
+            total_options += 1
+            if c > 0:
+                taken_options += 1
+            options.append({"id": opt.get("id"), "label": opt.get("label", ""),
+                            "count": c, "taken": c > 0})
+        per_node.append({"id": node.get("id"), "title": node.get("title", ""),
+                         "options": options})
+
+    never_taken = (
+        [
+            {"node_id": nid, "option_id": oid}
+            for nid, oids in counts.items()
+            for oid, c in oids.items()
+            if c == 0
+        ]
+        if run_count else []
+    )
+    return {
+        "run_count": run_count,
+        "choice_count": choice_count,
+        "total_options": total_options,
+        "taken_options": taken_options,
+        "never_taken_count": total_options - taken_options,
+        "coverage_ratio": round(taken_options / total_options, 4) if total_options else 0.0,
+        "stale_choices": stale_choices,
+        "nodes": per_node,
+        "never_taken": never_taken,
+    }

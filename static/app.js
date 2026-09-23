@@ -17,6 +17,7 @@ const state = {
   suppressClick: false,
   history: { stack: [], index: -1, mergeKey: null, mergeAt: 0 },
   savedSnapshot: null,        // JSON of {name, content} at last save / open
+  coverage: null,             // /coverage payload for currentId, null = not loaded
 };
 
 const HISTORY_LIMIT = 100;
@@ -25,6 +26,34 @@ const MERGE_WINDOW_MS = 700;  // consecutive typing in the same field merges int
 const $ = (sel) => document.querySelector(sel);
 const uid = (p) => `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const getNode = (id) => state.doc?.content.nodes.find((n) => n.id === id);
+
+// ---------------------------------------------------------------- branch coverage
+// Coverage counts come from saved runs server-side; loading is best-effort and
+// must never block editing or the real-time structure validation.
+
+async function refreshCoverage(render = true) {
+  if (!state.currentId) { state.coverage = null; return null; }
+  try {
+    state.coverage = await api(`/api/scripts/${state.currentId}/coverage`);
+  } catch {
+    state.coverage = null;
+  }
+  if (render && state.doc) {
+    renderInspector();
+    renderInspectorCoverageSummary();
+    if ($("#coverageModal").classList.contains("open")) renderCoverageModal();
+  }
+  return state.coverage;
+}
+
+// Returns the option stat object, or null when coverage is loaded but the
+// option is not part of the saved script stats (e.g. just added, unsaved);
+// undefined means coverage itself has not been loaded yet.
+const optStat = (nodeId, optionId) => {
+  if (!state.coverage) return undefined;
+  const node = state.coverage.nodes?.find((n) => n.id === nodeId);
+  return node?.options.find((o) => o.id === optionId) ?? null;
+};
 
 // ---------------------------------------------------------------- graph check
 
@@ -277,8 +306,10 @@ function renderInspector() {
           ${nodes.map((x) => `<option value="${x.id}" ${x.id === state.doc.content.start_node_id ? "selected" : ""}>${esc(x.title || x.id)}</option>`).join("")}
         </select>
       </div>
-      <div class="empty">在画布空白处拖动可平移；拖拽节点标题移动节点；拖拽选项右侧圆点连接到目标节点；点击连线可修改/删除。</div>`;
+      <div class="empty">在画布空白处拖动可平移；拖拽节点标题移动节点；拖拽选项右侧圆点连接到目标节点；点击连线可修改/删除。</div>
+      <div class="cov-summary" id="covSummary"></div>`;
     $("#startNode").onchange = (e) => { state.doc.content.start_node_id = e.target.value || null; changed(); };
+    renderInspectorCoverageSummary();
     return;
   }
 
@@ -301,17 +332,28 @@ function renderInspector() {
     </div>
     <div class="danger-zone">
       <button class="danger" id="delNode">删除此节点</button>
-    </div>`;
+    </div>
+    <div class="cov-summary" id="covSummary"></div>`;
 
   const renderOptEdits = () => {
     const box = $("#optEdits");
     const nodes = state.doc.content.nodes;
-    box.innerHTML = n.options.map((o) => `
+    const hasRuns = !!(state.coverage && state.coverage.run_count > 0);
+    box.innerHTML = n.options.map((o) => {
+      const stat = optStat(n.id, o.id);
+      let badge = "";
+      if (stat === undefined) badge = "";                       // stats not loaded
+      else if (stat === null) badge = `<span class="cov none" title="该选项尚未保存，不在已保存脚本的统计范围内">未纳入统计（保存后生效）</span>`;
+      else if (!hasRuns) badge = `<span class="cov none" title="该脚本尚无保存的运行记录">暂无运行记录</span>`;
+      else if (stat.count > 0) badge = `<span class="cov taken" title="已保存运行中该选项被选择的次数">已选 ${stat.count} 次</span>`;
+      else badge = `<span class="cov never" title="已保存运行中从未有人选择过该选项">⚠ 从未走过</span>`;
+      return `
       <div class="opt-edit" data-oid="${o.id}">
         <div class="row">
           <input type="text" class="opt-label-in" value="${esc(o.label)}" placeholder="选项文案">
           <button class="opt-del danger" title="删除选项">✕</button>
         </div>
+        <div class="cov-line">${badge}</div>
         <div class="row" style="margin-top:6px">
           <select class="opt-target">
             <option value="">— 未连接 —</option>
@@ -319,7 +361,8 @@ function renderInspector() {
               `<option value="${x.id}" ${x.id === o.target_id ? "selected" : ""}>${esc(x.title || x.id)}</option>`).join("")}
           </select>
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     box.querySelectorAll(".opt-edit").forEach((row) => {
       const oid = row.dataset.oid;
       const o = n.options.find((x) => x.id === oid);
@@ -371,6 +414,34 @@ function renderInspector() {
     state.selectedNodeId = null;
     changed();
   };
+  renderInspectorCoverageSummary();
+}
+
+function renderInspectorCoverageSummary() {
+  const box = $("#covSummary");
+  if (!box) return;
+  if (!state.currentId) { box.innerHTML = ""; return; }
+  const c = state.coverage;
+  if (!c) {
+    box.innerHTML = `<h4>分支覆盖</h4><div class="empty">统计加载中…</div>`;
+    return;
+  }
+  if (!c.run_count) {
+    box.innerHTML = `<h4>分支覆盖</h4>
+      <div class="empty">该脚本尚无运行记录，暂无可统计的分支。<br>
+        保存并运行预览后即可看到各选项被选择的次数。</div>`;
+    return;
+  }
+  const pct = Math.round(c.coverage_ratio * 100);
+  box.innerHTML = `<h4>分支覆盖（基于 ${c.run_count} 次已保存运行）</h4>
+    <div class="cov-meter"><span style="width:${pct}%"></span></div>
+    <div class="cov-nums">
+      <span class="cov taken">已走过 ${c.taken_options}/${c.total_options}</span>
+      <span class="cov never">从未走过 ${c.never_taken_count}</span>
+      <span class="cov-rate">${pct}%</span>
+    </div>
+    <button id="covOpenModal">📊 查看分支覆盖明细</button>`;
+  $("#covOpenModal").onclick = openCoverage;
 }
 
 // ---------------------------------------------------------------- history (undo / redo)
@@ -478,6 +549,7 @@ async function loadList(selectId) {
   else {
     state.doc = null;
     state.dirty = false;
+    state.coverage = null;
     state.markers = { cycles: [], orphans: [], uncovered: [], errors: [] };
     resetHistory();
     renderStatus();
@@ -491,11 +563,13 @@ async function openScript(id) {
   state.selectedNodeId = null;
   state.selectedEdge = null;
   state.dirty = false;
+  state.coverage = null;
   $("#scriptName").value = s.name;
   state.pan = { x: 60, y: 40 };
   validateLocal();
   renderAll();
   resetHistory();
+  refreshCoverage();          // no runs yet -> empty stats, validation unaffected
 }
 
 async function newScript(sample = false) {
@@ -538,6 +612,7 @@ async function saveScript() {
   renderAll();
   // saved: unsaved marker clears and undo/redo history restarts from this point
   resetHistory();
+  refreshCoverage();          // new/removed options re-align coverage to saved script
   toast("已保存");
 }
 
@@ -662,6 +737,7 @@ async function openPreview() {
   runId = r.run_id;
   renderRun(r);
   openModal("previewModal");
+  refreshCoverage();          // the new (empty) run is already a saved run
 }
 
 function renderRun(r) {
@@ -691,6 +767,7 @@ function renderRun(r) {
         const nr = await api(`/api/runs/${runId}/choice`, {
           method: "POST", body: { option_id: b.dataset.oid } });
         renderRun(nr);
+        refreshCoverage();
       };
     });
   }
@@ -705,6 +782,73 @@ $("#runRestart").onclick = async () => {
   if (!runId) return;
   const r = await api(`/api/runs/${runId}/restart`, { method: "POST" });
   renderRun(r);
+};
+
+// ---------------------------------------------------------------- branch coverage modal
+
+async function openCoverage() {
+  if (!state.currentId) return;
+  if (state.dirty) await saveScript();
+  openModal("coverageModal");
+  const body = $("#coverageBody");
+  body.innerHTML = `<div class="empty">统计加载中…</div>`;
+  await refreshCoverage(false);
+  renderCoverageModal();
+}
+
+function renderCoverageModal() {
+  const body = $("#coverageBody");
+  const c = state.coverage;
+  $("#coverageHead").textContent = "分支覆盖统计";
+  if (!c) { body.innerHTML = `<div class="empty">统计暂时不可用。</div>`; return; }
+  $("#coverageHead").textContent = `分支覆盖统计 · ${c.script_name || ""}`;
+  if (!c.run_count) {
+    body.innerHTML = `
+      <div class="empty" style="font-size:13px;line-height:1.8">
+        该脚本尚无运行记录，暂无可统计的分支（空统计）。<br>
+        请先「▶ 运行预览」完成一次作答，作答会保存在服务端，随后这里会按选项汇总被选择的次数。
+      </div>`;
+    return;
+  }
+  if (!c.total_options) {
+    body.innerHTML = `
+      <div class="cov-summary-bar">已保存运行 <b>${c.run_count}</b> 次</div>
+      <div class="empty" style="font-size:13px">当前脚本没有任何条件选项，覆盖率不适用。</div>`;
+    return;
+  }
+  const pct = Math.round(c.coverage_ratio * 100);
+  const stale = c.stale_choices
+    ? `<div class="cov-stale">另有 ${c.stale_choices} 次选择指向已被删除的节点/选项，未计入当前分支。</div>` : "";
+  body.innerHTML = `
+    <div class="cov-summary-bar">
+      <div>已保存运行 <b>${c.run_count}</b> 次 · 累计选择 <b>${c.choice_count}</b> 次</div>
+      <div class="cov-meter big"><span style="width:${pct}%"></span></div>
+      <div class="cov-nums">
+        <span class="cov taken">已走过 ${c.taken_options}/${c.total_options}</span>
+        <span class="cov never">从未走过 ${c.never_taken_count}</span>
+        <span class="cov-rate">覆盖率 ${pct}%</span>
+      </div>
+      ${stale}
+    </div>
+    ${c.nodes.map((node) => {
+      if (!node.options.length) return "";
+      const rows = node.options.map((o) => `
+        <div class="cov-row ${o.taken ? "" : "never"}">
+          <span class="cov-opt">${esc(o.label || "(未命名选项)")}</span>
+          ${o.taken
+            ? `<span class="cov taken">已选 ${o.count} 次</span>`
+            : `<span class="cov never">⚠ 从未走过</span>`}
+        </div>`).join("");
+      return `<div class="cov-node">
+          <div class="cov-node-title">${esc(node.title || node.id)}</div>${rows}
+        </div>`;
+    }).join("")}`;
+}
+
+$("#btnCoverage").onclick = openCoverage;
+$("#coverageRefresh").onclick = async () => {
+  await refreshCoverage(false);
+  renderCoverageModal();
 };
 
 // ---------------------------------------------------------------- canvas interaction
